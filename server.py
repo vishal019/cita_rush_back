@@ -22,7 +22,7 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 
 mongo_url = os.environ['MONGO_URL']
 import certifi
-client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where(), tlsAllowInvalidCertificates=True)
+client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
 db = client[os.environ['DB_NAME']]
 
 app = FastAPI()
@@ -657,7 +657,10 @@ async def seed_events():
     await db.events.insert_many(sample)
     return {"message": f"Seeded {len(sample)} events"}
 
-# ═══════════════════════ APP SETUP ═══════════════════════════════════
+@app.get("/")
+async def health_check():
+    return {"status": "ok", "message": "Cita Rush API is running"}
+
 app.include_router(api)
 
 app.add_middleware(
