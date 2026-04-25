@@ -21,7 +21,8 @@ UPLOADS_DIR = ROOT_DIR / 'uploads'
 UPLOADS_DIR.mkdir(exist_ok=True)
 
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+import certifi
+client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
 db = client[os.environ['DB_NAME']]
 
 app = FastAPI()
