@@ -18,7 +18,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 UPLOADS_DIR = ROOT_DIR / 'uploads'
-UPLOADS_DIR.mkdir(exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 mongo_url = os.environ['MONGO_URL']
 import certifi
@@ -219,6 +219,8 @@ async def create_booking(data: BookingCreate):
 
     try:
         def save_image(b64_str):
+            if not b64_str: return ""
+            if b64_str.startswith("http://") or b64_str.startswith("https://"): return b64_str
             header, encoded = b64_str.split(",", 1) if "," in b64_str else ("", b64_str)
             ext = "png" if "image/png" in header else "jpeg"
             image_data = base64.b64decode(encoded)
@@ -226,7 +228,7 @@ async def create_booking(data: BookingCreate):
             filepath = UPLOADS_DIR / filename
             with open(filepath, "wb") as f:
                 f.write(image_data)
-            return f"/uploads/{filename}"
+            return f"/a56hGH68rey3jg/gallery/{filename}"
 
         realtime_url = save_image(data.realtimePhoto)
         uploaded_url = save_image(data.uploadedPhoto)
@@ -297,6 +299,8 @@ async def create_waitlist(data: WaitlistCreate):
         def save_image(b64_str):
             if not b64_str:
                 return ""
+            if b64_str.startswith("http://") or b64_str.startswith("https://"):
+                return b64_str
             header, encoded = b64_str.split(",", 1) if "," in b64_str else ("", b64_str)
             ext = "png" if "image/png" in header else "jpeg"
             image_data = base64.b64decode(encoded)
@@ -304,7 +308,7 @@ async def create_waitlist(data: WaitlistCreate):
             filepath = UPLOADS_DIR / filename
             with open(filepath, "wb") as f:
                 f.write(image_data)
-            return f"/uploads/{filename}"
+            return f"/a56hGH68rey3jg/gallery/{filename}"
 
         realtime_url = save_image(data.realtimePhoto)
         uploaded_url = save_image(data.uploadedPhoto)
@@ -670,6 +674,7 @@ app.add_middleware(
 )
 
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+app.mount("/a56hGH68rey3jg/gallery", StaticFiles(directory=UPLOADS_DIR), name="gallery")
 
 @app.on_event("startup")
 async def startup_event():
