@@ -68,6 +68,7 @@ class WaitlistCreate(BaseModel):
     gender: Optional[str] = "female"
     age: Optional[int] = None
     city: Optional[str] = "Pune"
+    eventId: Optional[str] = ""
     instagramHandle: Optional[str] = ""
     linkedinProfile: Optional[str] = ""
     preferredArea: Optional[str] = ""
@@ -167,8 +168,8 @@ async def list_events():
     events = await db.events.find({"eventStatus": {"$in": ["published", "sold_out"]}}, {"_id": 0}).to_list(100)
     result = []
     for e in events:
-        spots_taken_male = await db.bookings.count_documents({"eventId": e["id"], "bookingStatus": {"$ne": "cancelled"}})
-        spots_taken_female = await db.waitlist.count_documents({"eventId": e["id"], "waitlistStatus": {"$in": ["approved", "confirmed"]}})
+        spots_taken_male = await db.bookings.count_documents({"eventId": e["id"], "gender": "male", "bookingStatus": {"$ne": "cancelled"}})
+        spots_taken_female = await db.bookings.count_documents({"eventId": e["id"], "gender": "female", "bookingStatus": {"$ne": "cancelled"}})
         e["spotsLeft"] = max(0, e.get("totalMaleSpots", 12) - spots_taken_male)
         e["spotsLeftFemale"] = max(0, e.get("totalFemaleSpots", 12) - spots_taken_female)
         # Backward compat fields
@@ -188,15 +189,17 @@ async def get_hero_event():
     if not event:
         event = await db.events.find_one({"eventStatus": "published"}, {"_id": 0})
     if event:
-        spots_taken = await db.bookings.count_documents({"eventId": event["id"], "bookingStatus": {"$ne": "cancelled"}})
-        event["spotsLeft"] = max(0, event.get("totalMaleSpots", 12) - spots_taken)
+        spots_taken_male = await db.bookings.count_documents({"eventId": event["id"], "gender": "male", "bookingStatus": {"$ne": "cancelled"}})
+        spots_taken_female = await db.bookings.count_documents({"eventId": event["id"], "gender": "female", "bookingStatus": {"$ne": "cancelled"}})
+        event["spotsLeft"] = max(0, event.get("totalMaleSpots", 12) - spots_taken_male)
+        event["spotsLeftFemale"] = max(0, event.get("totalFemaleSpots", 12) - spots_taken_female)
         event["name"] = event.get("title", "")
         event["area"] = event.get("venueArea", "")
         event["date"] = event.get("eventDate", "")
         event["time"] = event.get("eventTime", "")
         event["age_band"] = event.get("ageBand", "")
         event["spots_total"] = event.get("totalMaleSpots", 12)
-        event["spots_taken"] = spots_taken
+        event["spots_taken"] = spots_taken_male
     return event
 
 @api.get("/events/{event_id}")
@@ -212,6 +215,15 @@ async def create_booking(data: BookingCreate):
     event = await db.events.find_one({"id": data.eventId}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
+
+    if data.gender == "male":
+        spots_taken_male = await db.bookings.count_documents({"eventId": data.eventId, "gender": "male", "bookingStatus": {"$ne": "cancelled"}})
+        if spots_taken_male >= event.get("totalMaleSpots", 12):
+            raise HTTPException(status_code=400, detail="Event is fully booked for male participants.")
+    else:
+        spots_taken_female = await db.bookings.count_documents({"eventId": data.eventId, "gender": "female", "bookingStatus": {"$ne": "cancelled"}})
+        if spots_taken_female >= event.get("totalFemaleSpots", 12):
+            raise HTTPException(status_code=400, detail="Event is fully booked for female participants.")
 
     phone = normalize_phone(data.phoneNumber)
     wa_number = normalize_phone(data.whatsappNumber) if data.whatsappNumber else phone
@@ -255,9 +267,9 @@ async def create_booking(data: BookingCreate):
         "eventTime": event.get("eventTime", ""),
         "ageBand": event.get("ageBand", ""),
         "bookingStatus": "reserved",
-        "paymentStatus": "pending",
+        "paymentStatus": "free" if data.gender == "female" else "pending",
         "paymentReference": "",
-        "utrNumber": data.utrNumber,
+        "utrNumber": "FREE_ENTRY" if data.gender == "female" else data.utrNumber,
         "realtimePhotoUrl": realtime_url,
         "uploadedPhotoUrl": uploaded_url,
         "source": "website",
@@ -318,8 +330,59 @@ async def create_waitlist(data: WaitlistCreate):
 
     # If no eventId, create a general waitlist entry
     event = None
-    if data.eventId if hasattr(data, 'eventId') else False:
+    if data.eventId:
         event = await db.events.find_one({"id": data.eventId}, {"_id": 0})
+
+    if event:
+        spots_taken_female = await db.bookings.count_documents({"eventId": event["id"], "gender": "female", "bookingStatus": {"$ne": "cancelled"}})
+        if spots_taken_female < event.get("totalFemaleSpots", 12):
+            # There are vacant spots for females, so add to bookings table
+            booking = {
+                "id": str(uuid.uuid4()),
+                "fullName": data.fullName,
+                "firstName": first_name,
+                "email": data.email,
+                "phoneNumber": phone,
+                "whatsappNumber": wa_number,
+                "whatsappOptIn": data.whatsappOptIn,
+                "gender": data.gender or "female",
+                "age": data.age,
+                "city": data.city or "Pune",
+                "eventId": event["id"],
+                "eventName": event.get("title", ""),
+                "venueArea": event.get("venueArea", ""),
+                "venueName": event.get("venueName", ""),
+                "eventDate": event.get("eventDate", ""),
+                "eventTime": event.get("eventTime", ""),
+                "ageBand": event.get("ageBand", ""),
+                "bookingStatus": "reserved",
+                "paymentStatus": "free",
+                "paymentReference": "",
+                "utrNumber": "FREE_ENTRY",
+                "realtimePhotoUrl": realtime_url,
+                "uploadedPhotoUrl": uploaded_url,
+                "source": "website",
+                "notes": data.notes or "",
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.bookings.insert_one(booking)
+            
+            wa_result = {"success": False, "error": "WhatsApp opt-in not provided"}
+            if data.whatsappOptIn:
+                wa_result = send_registration_confirmation(
+                    wa_number, first_name, event.get("title", ""),
+                    event.get("eventDate", ""), event.get("eventTime", ""),
+                    event.get("venueArea", ""), "Reserved"
+                )
+                await log_whatsapp("booking", booking["id"], wa_number, "registration_confirmation",
+                                   os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
+                                   {"1": first_name, "2": event.get("title", "")}, wa_result)
+            return {
+                "id": booking["id"], "fullName": booking["fullName"], "email": booking["email"],
+                "status": "reserved", "isBooking": True,
+                "whatsappSent": wa_result.get("success", False),
+            }
 
     entry = {
         "id": str(uuid.uuid4()),
@@ -364,7 +427,7 @@ async def create_waitlist(data: WaitlistCreate):
 
     return {
         "id": entry["id"], "fullName": entry["fullName"], "email": entry["email"],
-        "waitlistStatus": entry["waitlistStatus"],
+        "waitlistStatus": entry["waitlistStatus"], "isWaitlist": True,
         "whatsappSent": wa_result.get("success", False),
     }
 
@@ -464,10 +527,72 @@ async def admin_list_bookings(event_id: Optional[str] = None, _=Depends(verify_a
 
 @api.put("/admin/bookings/{booking_id}/status")
 async def admin_update_booking_status(booking_id: str, data: StatusUpdate, _=Depends(verify_admin)):
-    result = await db.bookings.update_one({"id": booking_id}, {"$set": {"bookingStatus": data.status, "updatedAt": datetime.now(timezone.utc).isoformat()}})
-    if result.matched_count == 0:
+    booking = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
-    return {"message": f"Booking status updated to {data.status}"}
+
+    await db.bookings.update_one({"id": booking_id}, {"$set": {"bookingStatus": data.status, "updatedAt": datetime.now(timezone.utc).isoformat()}})
+    
+    promoted = False
+    if data.status == "cancelled" and booking.get("gender") == "female" and booking.get("eventId"):
+        waitlist_entry = await db.waitlist.find_one(
+            {"eventId": booking["eventId"], "waitlistStatus": "pending"},
+            sort=[("createdAt", 1)]
+        )
+        
+        if waitlist_entry:
+            new_booking = {
+                "id": str(uuid.uuid4()),
+                "fullName": waitlist_entry.get("fullName", ""),
+                "firstName": waitlist_entry.get("firstName", ""),
+                "email": waitlist_entry.get("email", ""),
+                "phoneNumber": waitlist_entry.get("phoneNumber", ""),
+                "whatsappNumber": waitlist_entry.get("whatsappNumber", ""),
+                "whatsappOptIn": waitlist_entry.get("whatsappOptIn", False),
+                "gender": "female",
+                "age": waitlist_entry.get("age"),
+                "city": waitlist_entry.get("city", "Pune"),
+                "eventId": booking["eventId"],
+                "eventName": booking.get("eventName", ""),
+                "venueArea": booking.get("venueArea", ""),
+                "venueName": booking.get("venueName", ""),
+                "eventDate": booking.get("eventDate", ""),
+                "eventTime": booking.get("eventTime", ""),
+                "ageBand": booking.get("ageBand", ""),
+                "bookingStatus": "reserved",
+                "paymentStatus": "free",
+                "paymentReference": "",
+                "utrNumber": "FREE_ENTRY",
+                "realtimePhotoUrl": waitlist_entry.get("realtimePhotoUrl", ""),
+                "uploadedPhotoUrl": waitlist_entry.get("uploadedPhotoUrl", ""),
+                "source": "waitlist_promotion",
+                "notes": waitlist_entry.get("notes", ""),
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.bookings.insert_one(new_booking)
+            
+            await db.waitlist.update_one(
+                {"id": waitlist_entry["id"]}, 
+                {"$set": {"waitlistStatus": "promoted_to_booking", "updatedAt": datetime.now(timezone.utc).isoformat()}}
+            )
+            
+            if new_booking["whatsappOptIn"]:
+                wa_result = send_registration_confirmation(
+                    new_booking.get("whatsappNumber") or new_booking["phoneNumber"],
+                    new_booking["firstName"], new_booking["eventName"],
+                    new_booking["eventDate"], new_booking["eventTime"],
+                    new_booking["venueArea"], "Reserved"
+                )
+                await log_whatsapp("booking", new_booking["id"], new_booking.get("whatsappNumber") or new_booking["phoneNumber"], "registration_confirmation",
+                                   os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
+                                   {"1": new_booking["firstName"], "2": new_booking["eventName"]}, wa_result)
+            promoted = True
+
+    msg = f"Booking status updated to {data.status}"
+    if promoted:
+        msg += " and a waitlisted female was automatically promoted to fill the spot!"
+    return {"message": msg}
 
 @api.put("/admin/bookings/{booking_id}/payment-status")
 async def admin_update_payment_status(booking_id: str, data: StatusUpdate, _=Depends(verify_admin)):
