@@ -81,3 +81,14 @@ def send_checkin_details(recipient_number: str, first_name: str, event_name: str
     content_sid = os.environ.get('TWILIO_CONTENT_SID_CHECKIN_DETAILS', '')
     variables = {"1": first_name, "2": event_name, "3": venue_name, "4": address, "5": reporting_time, "6": booking_status}
     return send_whatsapp_template(recipient_number, content_sid, variables)
+
+def send_booking_confirmed_whatsapp(recipient_number: str, full_name: str, event_name: str, 
+                                   event_date: str, event_time: str, venue_area: str):
+    content_sid = os.environ.get('TWILIO_CONTENT_SID_BOOKING_CONFIRMED', '')
+    # Combining details if the template only has a few variables, 
+    # but providing separate ones as requested for "name, location, details"
+    variables = {
+        "1": full_name,
+        "2": f"{event_name} at {venue_area} on {event_date} @ {event_time}"
+    }
+    return send_whatsapp_template(recipient_number, content_sid, variables)

@@ -11,7 +11,8 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from whatsapp_service import (
     normalize_phone, send_registration_confirmation,
-    send_event_reminder, send_checkin_details, send_whatsapp_template
+    send_event_reminder, send_checkin_details, send_whatsapp_template,
+    send_booking_confirmed_whatsapp
 )
 
 ROOT_DIR = Path(__file__).parent
@@ -532,6 +533,19 @@ async def admin_update_booking_status(booking_id: str, data: StatusUpdate, _=Dep
         raise HTTPException(status_code=404, detail="Booking not found")
 
     await db.bookings.update_one({"id": booking_id}, {"$set": {"bookingStatus": data.status, "updatedAt": datetime.now(timezone.utc).isoformat()}})
+    
+    if data.status == "confirmed" and booking.get("whatsappOptIn"):
+        wa_result = send_booking_confirmed_whatsapp(
+            booking.get("whatsappNumber") or booking["phoneNumber"],
+            booking.get("fullName", ""),
+            booking.get("eventName", ""),
+            booking.get("eventDate", ""),
+            booking.get("eventTime", ""),
+            booking.get("venueArea", "")
+        )
+        await log_whatsapp("booking", booking_id, booking.get("whatsappNumber") or booking["phoneNumber"], 
+                           "booking_confirmed", os.environ.get('TWILIO_CONTENT_SID_BOOKING_CONFIRMED', ''), 
+                           {}, wa_result)
     
     promoted = False
     if data.status == "cancelled" and booking.get("gender") == "female" and booking.get("eventId"):
