@@ -14,6 +14,7 @@ from whatsapp_service import (
     send_event_reminder, send_checkin_details, send_whatsapp_template,
     send_booking_confirmed_whatsapp
 )
+from email_service import send_booking_email, send_waitlist_email
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -287,9 +288,14 @@ async def create_booking(data: BookingCreate):
             event.get("eventDate", ""), event.get("eventTime", ""),
             event.get("venueArea", ""), "Reserved"
         )
-        await log_whatsapp("booking", booking["id"], wa_number, "registration_confirmation",
-                           os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
-                           {"1": first_name, "2": event.get("title", "")}, wa_result)
+                            {"1": first_name, "2": event.get("title", "")}, wa_result)
+    
+    # Automated Email
+    send_booking_email(
+        data.email, data.fullName, event.get("title", ""),
+        event.get("eventDate", ""), event.get("eventTime", ""),
+        event.get("venueArea", "")
+    )
 
     return {
         "id": booking["id"], "fullName": booking["fullName"], "email": booking["email"],
@@ -379,6 +385,13 @@ async def create_waitlist(data: WaitlistCreate):
                 await log_whatsapp("booking", booking["id"], wa_number, "registration_confirmation",
                                    os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
                                    {"1": first_name, "2": event.get("title", "")}, wa_result)
+            
+            # Automated Email (Promoted to Booking)
+            send_booking_email(
+                data.email, data.fullName, event.get("title", ""),
+                event.get("eventDate", ""), event.get("eventTime", ""),
+                event.get("venueArea", "")
+            )
             return {
                 "id": booking["id"], "fullName": booking["fullName"], "email": booking["email"],
                 "status": "reserved", "isBooking": True,
@@ -425,6 +438,15 @@ async def create_waitlist(data: WaitlistCreate):
         await log_whatsapp("waitlist", entry["id"], wa_number, "registration_confirmation",
                            os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
                            {"1": first_name}, wa_result)
+    
+    # Automated Email (Waitlist)
+    send_waitlist_email(
+        data.email, data.fullName, 
+        event.get("title", "Cita Rush Event") if event else "Cita Rush Event",
+        event.get("eventDate", "TBA") if event else "TBA",
+        event.get("eventTime", "TBA") if event else "TBA",
+        event.get("venueArea", data.preferredArea or "Pune") if event else (data.preferredArea or "Pune")
+    )
 
     return {
         "id": entry["id"], "fullName": entry["fullName"], "email": entry["email"],
@@ -546,6 +568,16 @@ async def admin_update_booking_status(booking_id: str, data: StatusUpdate, _=Dep
         await log_whatsapp("booking", booking_id, booking.get("whatsappNumber") or booking["phoneNumber"], 
                            "booking_confirmed", os.environ.get('TWILIO_CONTENT_SID_BOOKING_CONFIRMED', ''), 
                            {}, wa_result)
+        
+        # Automated Email
+        send_booking_email(
+            booking.get("email"),
+            booking.get("fullName", ""),
+            booking.get("eventName", ""),
+            booking.get("eventDate", ""),
+            booking.get("eventTime", ""),
+            booking.get("venueArea", "")
+        )
     
     promoted = False
     if data.status == "cancelled" and booking.get("gender") == "female" and booking.get("eventId"):
@@ -601,6 +633,17 @@ async def admin_update_booking_status(booking_id: str, data: StatusUpdate, _=Dep
                 await log_whatsapp("booking", new_booking["id"], new_booking.get("whatsappNumber") or new_booking["phoneNumber"], "registration_confirmation",
                                    os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
                                    {"1": new_booking["firstName"], "2": new_booking["eventName"]}, wa_result)
+            
+            # Automated Email
+            send_booking_email(
+                new_booking.get("email"),
+                new_booking.get("fullName", ""),
+                new_booking.get("eventName", ""),
+                new_booking.get("eventDate", ""),
+                new_booking.get("eventTime", ""),
+                new_booking.get("venueArea", "")
+            )
+            
             promoted = True
 
     msg = f"Booking status updated to {data.status}"
@@ -627,6 +670,22 @@ async def admin_resend_booking_whatsapp(booking_id: str, _=Depends(verify_admin)
     await log_whatsapp("booking", booking_id, booking.get("whatsappNumber", ""),
                        "registration_confirmation", os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''), {}, result)
     return {"success": result.get("success"), "error": result.get("error")}
+
+@api.post("/admin/bookings/{booking_id}/send-email")
+async def admin_send_booking_email(booking_id: str, _=Depends(verify_admin)):
+    booking = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    
+    result = send_booking_email(
+        booking.get("email"),
+        booking.get("fullName", ""),
+        booking.get("eventName", ""),
+        booking.get("eventDate", ""),
+        booking.get("eventTime", ""),
+        booking.get("venueArea", "")
+    )
+    return result
 
 @api.get("/admin/bookings/export")
 async def admin_export_bookings(event_id: Optional[str] = None, _=Depends(verify_admin)):
