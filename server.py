@@ -288,7 +288,9 @@ async def create_booking(data: BookingCreate):
             event.get("eventDate", ""), event.get("eventTime", ""),
             event.get("venueArea", ""), "Reserved"
         )
-                            {"1": first_name, "2": event.get("title", "")}, wa_result)
+        await log_whatsapp("booking", booking["id"], wa_number, "registration_confirmation",
+                           os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
+                           {"1": first_name, "2": event.get("title", "")}, wa_result)
     
     # Automated Email
     send_booking_email(
@@ -437,7 +439,7 @@ async def create_waitlist(data: WaitlistCreate):
         )
         await log_whatsapp("waitlist", entry["id"], wa_number, "registration_confirmation",
                            os.environ.get('TWILIO_CONTENT_SID_REG_CONFIRM', ''),
-                           {"1": first_name}, wa_result)
+                           {"1": first_name, "2": event.get("title", "Cita Rush Event") if event else "Cita Rush Event"}, wa_result)
     
     # Automated Email (Waitlist)
     send_waitlist_email(
