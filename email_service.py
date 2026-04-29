@@ -6,7 +6,7 @@ from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
 
-def send_booking_email(recipient_email: str, full_name: str, event_name: str, event_date: str, event_time: str, venue_area: str):
+def _send_email(recipient_email, subject, html_content):
     sender_email = os.environ.get('GMAIL_USER')
     sender_password = os.environ.get('GMAIL_APP_PASSWORD')
 
@@ -15,10 +15,24 @@ def send_booking_email(recipient_email: str, full_name: str, event_name: str, ev
         return {"success": False, "error": "Gmail credentials not configured"}
 
     message = MIMEMultipart("alternative")
-    message["Subject"] = f"Booking Confirmed: {event_name} - Cita Rush"
+    message["Subject"] = subject
     message["From"] = f"Cita Rush <{sender_email}>"
     message["To"] = recipient_email
+    message.attach(MIMEText(html_content, "html"))
 
+    try:
+        # Using Port 587 with STARTTLS for better compatibility
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, recipient_email, message.as_string())
+        logger.info(f"Email sent to {recipient_email}")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Email send failed to {recipient_email}: {e}")
+        return {"success": False, "error": str(e)}
+
+def send_booking_email(recipient_email: str, full_name: str, event_name: str, event_date: str, event_time: str, venue_area: str):
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -42,33 +56,9 @@ def send_booking_email(recipient_email: str, full_name: str, event_name: str, ev
       </body>
     </html>
     """
-
-    part = MIMEText(html, "html")
-    message.attach(part)
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, recipient_email, message.as_string())
-        logger.info(f"Email sent to {recipient_email}")
-        return {"success": True}
-    except Exception as e:
-        logger.error(f"Email send failed to {recipient_email}: {e}")
-        return {"success": False, "error": str(e)}
+    return _send_email(recipient_email, f"Booking Confirmed: {event_name} - Cita Rush", html)
 
 def send_waitlist_email(recipient_email: str, full_name: str, event_name: str, event_date: str, event_time: str, venue_area: str):
-    sender_email = os.environ.get('GMAIL_USER')
-    sender_password = os.environ.get('GMAIL_APP_PASSWORD')
-
-    if not sender_email or not sender_password:
-        logger.warning("Gmail credentials not configured")
-        return {"success": False, "error": "Gmail credentials not configured"}
-
-    message = MIMEMultipart("alternative")
-    message["Subject"] = f"Waitlist Confirmed: {event_name} - Cita Rush"
-    message["From"] = f"Cita Rush <{sender_email}>"
-    message["To"] = recipient_email
-
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -92,16 +82,4 @@ def send_waitlist_email(recipient_email: str, full_name: str, event_name: str, e
       </body>
     </html>
     """
-
-    part = MIMEText(html, "html")
-    message.attach(part)
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, recipient_email, message.as_string())
-        logger.info(f"Waitlist email sent to {recipient_email}")
-        return {"success": True}
-    except Exception as e:
-        logger.error(f"Waitlist email send failed to {recipient_email}: {e}")
-        return {"success": False, "error": str(e)}
+    return _send_email(recipient_email, f"Waitlist Confirmed: {event_name} - Cita Rush", html)
